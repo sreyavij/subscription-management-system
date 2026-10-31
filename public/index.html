@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Brightloop</title></head>
+<body style="font-family:sans-serif;max-width:360px;margin:60px auto">
+  <h2>Brightloop Login</h2>
+  <input id="email" placeholder="Email" style="width:100%;margin:4px 0"><br>
+  <input id="pw" type="password" placeholder="Password" style="width:100%;margin:4px 0"><br>
+  <input id="name" placeholder="Name (signup only)" style="width:100%;margin:4px 0"><br>
+  <button onclick="login()">Login</button>
+  <button onclick="signup()">Sign up</button>
+  <p id="msg" style="color:crimson"></p>
+<script>
+const body = () => JSON.stringify({ name: name.value, email: email.value, password: pw.value });
+const post = (u) => fetch(u, { method:'POST', headers:{'Content-Type':'application/json'}, body: body() }).then(r => r.json());
+async function signup(){ const d = await post('/api/signup'); msg.textContent = d.error || 'Account created. Now log in.'; }
+async function login(){
+  const d = await post('/api/login');
+  if (d.error) return msg.textContent = d.error;
+  localStorage.setItem('token', d.token); localStorage.setItem('role', d.role);
+  location.href = d.role === 'customer' ? '/portal.html' : '/dashboard.html';
+}
+</script>
+</body>
+</html>
