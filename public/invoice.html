@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Invoice</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<p class="noprint"><button class="primary" onclick="print()">Print or save as PDF</button></p>
+<div id="inv"></div>
+<script src="/app.js"></script>
+<script>
+(async () => {
+  const id = new URLSearchParams(location.search).get('id');
+  const [i, c] = await Promise.all([api((ROLE === 'customer' ? 'my/invoices/' : 'inv/') + id), api('company')]);
+  if (i.error) return $('inv').innerHTML = `<p class="err">${esc(i.error)}</p>`;
+  $('inv').innerHTML = `
+    <h2>${esc(c.company_name || 'Brightloop Software')}</h2>
+    <p>${esc(c.address || '')}<br>${esc(c.email || '')} ${esc(c.phone || '')}<br>${c.tax_id ? 'Tax ID: ' + esc(c.tax_id) : ''}</p>
+    <h3>Invoice ${esc(i.number)}</h3>
+    <p>Billed to ${esc(i.customer_name)}<br>${esc(i.address || '')}<br>Period starting ${i.period_start}<br>Due ${i.due_date}<br>Status: ${esc(i.status)}</p>
+    ${table(i.lines, ['description', 'qty', 'unit_price', 'discount', 'tax', 'amount'])}
+    <p>Subtotal ${money(i.subtotal)}<br>Discount ${money(i.discount_total)}<br>Tax ${money(i.tax_total)}<br><b>Total ${money(i.total)}</b><br>Paid ${money(i.amount_paid)}</p>
+    <p class="empty">${esc(c.invoice_footer || '')}</p>`;
+})();
+</script></body></html>

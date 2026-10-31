@@ -28,4 +28,5 @@ app.post('/api/staff', auth('admin'), (req, res) => {
 // Quick test route to prove roles work
 app.get('/api/me', auth(), (req, res) => res.json(req.user));
 require('./routes')(app);
+require('./routes2')(app);
 app.listen(3000, () => console.log('Running on http://localhost:3000'));

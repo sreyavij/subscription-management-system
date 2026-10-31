@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Brightloop Back Office</title><link rel="stylesheet" href="/style.css"></head>
+<body class="wide">
+<div class="shell">
+  <aside class="side" id="menu"></aside>
+  <main><p id="msg"></p><div id="view"></div></main>
+</div>
+<script src="/app.js"></script>
+<script>
+if (ROLE === 'customer') location.href = '/portal.html';
+const ADMIN = ROLE === 'admin';
+let METHODS = ['UPI', 'Card', 'Cash', 'Bank transfer'];
+api('company').then(c => { if (c && c.methods) METHODS = c.methods.split(',').map(s => s.trim()).filter(Boolean); });
+
+// ---------- Menu and router ----------
+const MENU = [['dashboard', 'Dashboard'], ['customers', 'Customers'], ['subs', 'Subscriptions'], ['templates', 'Quotation templates'],
+  ['invoices', 'Invoices'], ['payments', 'Payments'], ['reports', 'Reports'],
+  ...(ADMIN ? [null, ['products', 'Products'], ['variants', 'Variants'], ['plans', 'Plans'], ['discounts', 'Discounts'],
+    ['taxes', 'Taxes'], ['users', 'Users and roles'], ['settings', 'Settings']] : [])];
+$('menu').innerHTML = '<div class="brand">Brightloop</div>' +
+  MENU.map(m => m ? `<a href="#/${m[0]}">${m[1]}</a>` : '<hr>').join('') + '<button onclick="logout()">Log out</button>';
+
+async function route() {
+  const [name, id] = (location.hash.replace('#/', '') || 'dashboard').split('/');
+  document.querySelectorAll('.side a').forEach(a => a.className = a.getAttribute('href') === '#/' + name ? 'on' : '');
+  const fn = ROUTES[name];
+  if (!fn) return $('view').innerHTML = '<p class="err">Page not found.</p>';
+  if (ADMIN_ONLY.includes(name) && !ADMIN) return $('view').innerHTML = '<p class="err">Only an admin can open this page.</p>';
+  await fn(id);
+}
+addEventListener('hashchange', () => { say(''); route(); });
+
+// ---------- Dashboard ----------
+async function dashboard() {
+  const [o, act] = await Promise.all([api('rep/overview'), api('activity')]);
+  $('view').innerHTML = `<h2>Dashboard</h2>
+   <div class="cards">${kpi('Active subscriptions', o.active)}${kpi('Pending quotations', o.pending_quotes)}
+     ${kpi('Outstanding', money(o.outstanding))}${kpi('Overdue invoices', o.overdue_count, o.overdue_count ? 'bad' : '')}</div>
+   ${ADMIN ? `<div class="cards">${kpi('MRR', money(o.mrr))}${kpi('ARR', money(o.arr))}${kpi('Revenue received', money(o.revenue), 'ok')}${kpi('Overdue amount', money(o.overdue_amount), o.overdue_amount ? 'bad' : '')}</div>` : ''}
+   <div class="bar"><button class="primary" onclick="runBilling()">Run billing</button>
+     <button onclick="go('subs/new')">New subscription</button><button onclick="go('payments')">Record payment</button></div>
+   <h3>Recent activity</h3>${table(act, ['at', 'who', 'entity', 'entity_id', 'action'])}`;
+}
+async function runBilling() {
+  const d = await api('billing/run', 'POST', {});
+  say(d.error || `${d.invoices_created} new invoice(s) created. Open Invoices to confirm them.`, !!d.error);
+}
+
+// ---------- Customers ----------
+const CUST = [F('name'), F('email', 'email'), F('company'), F('phone'), F('address'), F('password', 'password')];
+const custFields = id => id ? CUST.filter(f => f.n !== 'password') : CUST;
+let CL = [];
+async function customers(id) {
+  if (id) return customerDetail(id);
+  $('view').innerHTML = `<h2>Customers</h2><div class="bar">
+    <input id="cq" placeholder="Search name, company or email" oninput="custList()">
+    <select id="cs" onchange="custList()"><option value="">All customers</option><option value="active">With an active subscription</option><option value="inactive">No active subscription</option></select>
+    <button class="primary" onclick="custForm()">New customer</button></div><div id="form"></div><div id="list"></div>`;
+  custList();
+}
+async function custList() {
+  CL = await api('clients?q=' + encodeURIComponent($('cq').value) + '&status=' + $('cs').value);
+  $('list').innerHTML = table(CL, ['id', 'name', 'company', 'email', 'phone', 'active_subs', 'owed'],
+    r => `<a href="#/customers/${r.id}">Open</a> <button onclick="custForm(${r.id})">Edit</button>`);
+}
+function custForm(id = 0) {
+  const fs = custFields(id);
+  $('form').innerHTML = `<h3>${id ? 'Edit customer' : 'New customer'}</h3>${formHTML(fs)}<br><br>
+    <button class="primary" onclick="custSave(${id})">Save customer</button> <button onclick="$('form').innerHTML=''">Cancel</button>`;
+  if (id) { const r = arr(CL).find(x => x.id === id); fs.forEach(f => $('f_' + f.n).value = r[f.n] ?? ''); }
+}
+async function custSave(id) {
+  const d = await api(id ? 'clients/' + id : 'clients', id ? 'PUT' : 'POST', readForm(custFields(id)));
+  say(d.error || 'Customer saved', !!d.error);
+  if (!d.error) { $('form').innerHTML = ''; custList(); }
+}
+async function customerDetail(id) {
+  const c = await api('clients/' + id);
+  if (c.error) return $('view').innerHTML = `<p class="err">${esc(c.error)}</p>`;
+  $('view').innerHTML = `<h2><a href="#/customers">Customers</a> / ${esc(c.name)}</h2>
+   <p>${esc(c.company || '')}<br>${esc(c.email)}<br>${esc(c.phone || '')}<br>${esc(c.address || '')}</p>
+   <h3>Subscriptions</h3>${table(c.subs.map(s => ({ ...s, stage: stepper(s.status) })), ['number', 'plan_name', 'stage', 'expiry_date'], s => `<a href="#/subs/${s.id}">Open</a>`)}
+   <h3>Invoices</h3>${table(c.invoices, ['number', 'total', 'amount_paid', 'status', 'due_date'], i => `<a href="#/invoices/${i.id}">Open</a>`)}
+   <h3>Payment history</h3>${table(c.payments, ['date', 'method', 'amount', 'invoice_number'])}`;
+}
+
+// ---------- Subscriptions ----------
+let SF = '';
+async function subs(id) {
+  if (id === 'new') return subNew();
+  if (id) return subDetail(id);
+  $('view').innerHTML = `<h2>Subscriptions</h2><div class="bar">
+    ${['', ...STEPS].map(s => `<button class="chip" data-s="${s}" onclick="SF='${s}';subList()">${s || 'All'}</button>`).join('')}
+    <input id="sq" placeholder="Search number or customer" oninput="subList()">
+    <button class="primary" onclick="go('subs/new')">New subscription</button></div><div id="list"></div>`;
+  SF = ''; subList();
+}
+async function subList() {
+  document.querySelectorAll('.chip').forEach(b => b.classList.toggle('on', b.dataset.s === SF));
+  const rows = arr(await api('subs?status=' + SF + '&q=' + encodeURIComponent($('sq').value))).map(s => ({ ...s, stage: stepper(s.status) }));
+  $('list').innerHTML = table(rows, ['number', 'customer_name', 'plan_name', 'stage', 'start_date', 'expiry_date', 'next_billing', 'paused'], s => `<a href="#/subs/${s.id}">Open</a>`);
+}
+function lineHTML() {
+  return `<div class="line">Product <select class="l_p">${opts(REF.products, r => esc(r.name) + ' (' + r.sales_price + ')')}</select>
+   Variant <select class="l_v">${opts(REF.variants, v => { const p = arr(REF.products).find(p => p.id === v.product_id); return esc((p ? p.name : '') + ': ' + v.value) + ' (+' + v.extra_price + ')'; }, 'id', true)}</select>
+   Qty <input class="l_q" type="number" value="1" min="1">
+   Tax <select class="l_t">${opts(REF.taxes, r => esc(r.name) + ' ' + r.rate + '%', 'id', true)}</select>
+   <button onclick="this.parentNode.remove()">Remove</button></div>`;
+}
+const addLine = () => $('lines').insertAdjacentHTML('beforeend', lineHTML());
+const readLines = () => [...document.querySelectorAll('.line')].map(l => ({
+  product_id: +l.querySelector('.l_p').value, variant_id: +l.querySelector('.l_v').value || null,
+  qty: +l.querySelector('.l_q').value, tax_id: +l.querySelector('.l_t').value || null }));
+async function subNew() {
+  await loadRefs(['clients', 'plans', 'products', 'variants', 'taxes', 'terms']);
+  $('view').innerHTML = `<h2><a href="#/subs">Subscriptions</a> / New</h2><div id="form">
+   <label>Customer</label><select id="s_cust">${opts(REF.clients, c => esc(c.name) + ' (' + esc(c.email) + ')')}</select>
+   <label>Plan</label><select id="s_plan">${opts(REF.plans, p => esc(p.name) + ' (' + p.period + ')')}</select>
+   <label>Start date</label><input id="s_start" type="date" value="${today()}">
+   <label>Expiry date</label><input id="s_exp" type="date">
+   <label>Payment terms</label><select id="s_terms">${opts(REF.terms, t => esc(t.name), 'name')}</select>
+   <h4>Lines</h4><div id="lines"></div><button onclick="addLine()">Add line</button><br><br>
+   <button class="primary" onclick="subSave()">Create subscription</button></div>`;
+  addLine();
+}
+async function subSave() {
+  const lines = readLines();
+  if (!lines.length || !$('s_start').value) return say('Add a start date and at least one line', true);
+  const d = await api('subscriptions', 'POST', { customer_id: +$('s_cust').value, plan_id: +$('s_plan').value,
+    start_date: $('s_start').value, expiry_date: $('s_exp').value || null, payment_terms: $('s_terms').value, lines });
+  if (d.error) return say(d.error, true);
+  go('subs/' + d.id);
+}
+async function subDetail(id) {
+  const s = await api('subs/' + id);
+  if (s.error) return $('view').innerHTML = `<p class="err">${esc(s.error)}</p>`;
+  const next = { Draft: 'Quotation', Quotation: 'Confirmed', Confirmed: 'Active', Active: 'Closed' }[s.status];
+  $('view').innerHTML = `<h2><a href="#/subs">Subscriptions</a> / ${esc(s.number)}</h2>
+   <p>${stepper(s.status).html} ${s.paused ? pill('Paused').html : ''}</p>
+   <p>${esc(s.customer_name)}<br>Plan: ${esc(s.plan_name)}, billed ${s.period}<br>Start ${s.start_date || '-'}, expires ${s.expiry_date || '-'}<br>
+     Payment terms: ${esc(s.payment_terms || '-')}${s.valid_until ? '<br>Quotation valid until ' + s.valid_until : ''}</p>
+   <div class="bar">${next ? `<button class="primary" onclick="subStep(${s.id})">Move to ${next}</button>` : ''}
+     ${s.status === 'Active' ? `<button onclick="subPause(${s.id})">${s.paused ? 'Resume' : 'Pause'}</button>` : ''}</div>
+   <h3>Line items</h3>${table(s.lines.map(l => ({ ...l, product: l.product_name + (l.variant ? ' (' + l.variant + ')' : '') })), ['product', 'qty', 'unit_price', 'tax', 'total'])}
+   <h3>Audit trail</h3>${table(s.audit, ['at', 'who', 'action'])}`;
+}
+async function subStep(id) { const d = await api(`subscriptions/${id}/advance`, 'POST'); say(d.error || 'Now ' + d.status, !!d.error); subDetail(id); }
+async function subPause(id) { await api(`subscriptions/${id}/pause`, 'POST'); subDetail(id); }
+
+// ---------- Quotation templates ----------
+async function templates(id) {
+  if (id === 'new') return ADMIN ? tplNew() : ($('view').innerHTML = '<p class="err">Only an admin can create templates.</p>');
+  const rows = await api('templates');
+  $('view').innerHTML = `<h2>Quotation templates</h2>${ADMIN ? '<div class="bar"><button class="primary" onclick="go(\'templates/new\')">New template</button></div>' : ''}
+   ${table(rows, ['id', 'name', 'plan_name', 'validity_days'], t => `<button onclick="tplApply(${t.id})">Use template</button>` + (ADMIN ? ` <button onclick="tplDel(${t.id})">Delete</button>` : ''))}<div id="form"></div>`;
+}
+async function tplApply(id) {
+  await loadRefs(['clients', 'terms']);
+  $('form').innerHTML = `<h3>Create a quotation from this template</h3>
+   <label>Customer</label><select id="a_cust">${opts(REF.clients, c => esc(c.name))}</select>
+   <label>Start date</label><input id="a_start" type="date" value="${today()}">
+   <label>Payment terms</label><select id="a_terms">${opts(REF.terms, t => esc(t.name), 'name')}</select><br><br>
+   <button class="primary" onclick="tplCreate(${id})">Create quotation</button>`;
+}
+async function tplCreate(id) {
+  const d = await api(`templates/${id}/apply`, 'POST', { customer_id: +$('a_cust').value, start_date: $('a_start').value, payment_terms: $('a_terms').value });
+  if (d.error) return say(d.error, true);
+  go('subs/' + d.id);
+}
+async function tplDel(id) { if (!confirm('Delete this template?')) return; await api('templates/' + id, 'DELETE'); templates(); }
+async function tplNew() {
+  await loadRefs(['plans', 'products', 'variants', 'taxes']);
+  $('view').innerHTML = `<h2><a href="#/templates">Templates</a> / New</h2><div id="form">
+   <label>Template name</label><input id="t_name">
+   <label>Valid for (days)</label><input id="t_days" type="number" value="30">
+   <label>Default plan</label><select id="t_plan">${opts(REF.plans, p => esc(p.name))}</select>
+   <h4>Product lines</h4><div id="lines"></div><button onclick="addLine()">Add line</button><br><br>
+   <button class="primary" onclick="tplSave()">Save template</button></div>`;
+  addLine();
+}
+async function tplSave() {
+  const d = await api('templates', 'POST', { name: $('t_name').value, validity_days: +$('t_days').value, plan_id: +$('t_plan').value, lines: readLines() });
+  if (d.error) return say(d.error, true);
+  go('templates');
+}
+
+// ---------- Invoices ----------
+let INVF = '';
+async function invoices(id) {
+  if (id) return invDetail(id);
+  $('view').innerHTML = `<h2>Invoices</h2><div class="bar">
+   ${['', 'Draft', 'Confirmed', 'Paid', 'Overdue'].map(s => `<button class="chip" data-s="${s}" onclick="INVF='${s}';invList()">${s || 'All'}</button>`).join('')}
+   <input id="iq" placeholder="Search number or customer" oninput="invList()">
+   <button class="primary" onclick="runBilling().then(invList)">Run billing</button></div><div id="list"></div>`;
+  INVF = ''; invList();
+}
+async function invList() {
+  document.querySelectorAll('.chip').forEach(b => b.classList.toggle('on', b.dataset.s === INVF));
+  const rows = arr(await api('inv?status=' + INVF + '&q=' + encodeURIComponent($('iq').value)))
+    .map(i => ({ ...i, state: html(pill(i.status).html + (i.overdue ? ' ' + pill('Overdue').html : '')) }));
+  $('list').innerHTML = table(rows, ['number', 'customer_name', 'period_start', 'due_date', 'total', 'amount_paid', 'state'], i => `<a href="#/invoices/${i.id}">Open</a>`);
+}
+const payInputs = amt => `<input id="p_amt" type="number" step="0.01" value="${amt}">
+  <select id="p_method">${METHODS.map(m => `<option>${esc(m)}</option>`).join('')}</select>
+  <input id="p_date" type="date" value="${today()}"><input id="p_note" placeholder="Note">`;
+async function invDetail(id) {
+  const i = await api('inv/' + id);
+  if (i.error) return $('view').innerHTML = `<p class="err">${esc(i.error)}</p>`;
+  const owed = i.total - i.amount_paid, overdue = i.status === 'Confirmed' && i.due_date < today();
+  $('view').innerHTML = `<h2><a href="#/invoices">Invoices</a> / ${esc(i.number)}</h2>
+   <p>${pill(i.status).html} ${overdue ? pill('Overdue').html : ''}</p>
+   <p>${esc(i.customer_name)}<br>Due ${i.due_date}<br>Total ${money(i.total)}, paid ${money(i.amount_paid)}, owed ${money(owed)}${i.sent_at ? '<br>Emailed ' + i.sent_at : ''}</p>
+   <div class="bar">${i.status === 'Draft' ? `<button class="primary" onclick="invAct(${i.id},'confirm')">Confirm</button>` : ''}
+    ${['Draft', 'Confirmed'].includes(i.status) ? `<button onclick="invAct(${i.id},'cancel')">Cancel invoice</button>` : ''}
+    <button onclick="invSend(${i.id})">Send email</button><button onclick="window.open('/invoice.html?id=${i.id}')">Print or save PDF</button></div>
+   ${i.status === 'Confirmed' ? `<h3>Record payment</h3><div class="bar">${payInputs(owed.toFixed(2))}<button class="primary" onclick="paySave(${i.id})">Save payment</button></div>` : ''}
+   <h3>Lines</h3>${table(i.lines, ['description', 'qty', 'unit_price', 'discount', 'tax', 'amount'])}
+   <h3>Payments</h3>${table(i.payments, ['date', 'method', 'amount', 'note'])}`;
+}
+async function invAct(id, act) { const d = await api(`invoices/${id}/${act}`, 'POST'); say(d.error || 'Done', !!d.error); invDetail(id); }
+async function invSend(id) { const d = await api(`inv/${id}/send`, 'POST'); say(d.error || 'Invoice emailed to ' + d.to + ' (logged in the server console)', !!d.error); invDetail(id); }
+
+// ---------- Payments ----------
+async function payments() {
+  const open = arr(await api('inv?status=Confirmed&limit=200'));
+  $('view').innerHTML = `<h2>Payments</h2><h3>Record payment</h3>
+   ${open.length ? `<div class="bar"><select id="p_inv" onchange="payFill()">${open.map(i => `<option value="${i.id}" data-owed="${(i.total - i.amount_paid).toFixed(2)}">${esc(i.number)}, ${esc(i.customer_name)}, owes ${money(i.total - i.amount_paid)}</option>`).join('')}</select>
+     ${payInputs(open[0] ? (open[0].total - open[0].amount_paid).toFixed(2) : '')}<button class="primary" onclick="paySave(0)">Save payment</button></div>`
+     : '<p class="empty">No confirmed invoices are waiting for payment.</p>'}
+   <h3>Payment history</h3><div class="bar">
+    <select id="pm" onchange="payList()"><option value="">All methods</option>${METHODS.map(m => `<option>${esc(m)}</option>`).join('')}</select>
+    <input id="pf" type="date" onchange="payList()"><input id="pt" type="date" onchange="payList()"></div><div id="list"></div>`;
+  payList();
+}
+const payFill = () => { const o = $('p_inv').selectedOptions[0]; $('p_amt').value = o.dataset.owed; };
+async function payList() {
+  const rows = await api(`pay?method=${encodeURIComponent($('pm').value)}&from=${$('pf').value}&to=${$('pt').value}`);
+  $('list').innerHTML = table(rows, ['date', 'customer_name', 'invoice_number', 'method', 'amount', 'note']);
+}
+async function paySave(invId) {
+  const d = await api('payments', 'POST', { invoice_id: invId || +$('p_inv').value, method: $('p_method').value, amount: +$('p_amt').value, date: $('p_date').value, note: $('p_note').value });
+  say(d.error || 'Payment recorded', !!d.error);
+  if (!d.error) invId ? invDetail(invId) : payments();
+}
+
+// ---------- Reports ----------
+async function reports() {
+  await loadRefs(['clients', 'plans']);
+  $('view').innerHTML = `<h2>Reports</h2><div class="bar">
+   <input id="rf" type="date" onchange="repGo()"><input id="rt" type="date" onchange="repGo()">
+   <select id="rc" onchange="repGo()">${opts(REF.clients, c => esc(c.name), 'id', 'All customers')}</select>
+   <select id="rp" onchange="repGo()">${opts(REF.plans, p => esc(p.name), 'id', 'All plans')}</select>
+   <select id="rm" onchange="repGo()"><option value="">All methods</option>${METHODS.map(m => `<option>${esc(m)}</option>`).join('')}</select>
+   <button onclick="print()">Print or save PDF</button>
+   ${ADMIN ? `<button onclick="exportCsv('invoices')">Export invoices CSV</button><button onclick="exportCsv('payments')">Export payments CSV</button><button onclick="exportCsv('subscriptions')">Export subscriptions CSV</button>` : ''}
+  </div><div id="rep"></div>`;
+  repGo();
+}
+async function repGo() {
+  const qs = new URLSearchParams({ from: $('rf').value, to: $('rt').value, customer: $('rc').value, plan: $('rp').value, method: $('rm').value });
+  const [t, ag, ov] = await Promise.all([api('rep/trend?' + qs), api('rep/aging'), api('rep/overview')]);
+  $('rep').innerHTML = `<div class="cards">${kpi('Active subscriptions', ov.active)}${kpi('MRR', money(ov.mrr))}${kpi('ARR', money(ov.arr))}${kpi('Outstanding', money(ov.outstanding))}</div>
+   <h3>Revenue by month</h3>${bars(t.monthly, 'month', 'total')}
+   <h3>Revenue by year</h3>${bars(t.yearly, 'year', 'total')}
+   <h3>Revenue by plan</h3>${bars(t.by_plan, 'plan', 'total')}
+   <h3>Overdue aging</h3><div class="cards">${Object.entries(ag.buckets || {}).map(([k, v]) => kpi(k + ' days', money(v), v ? 'bad' : '')).join('')}</div>
+   ${table(ag.rows, ['number', 'customer_name', 'due_date', 'days', 'owed', 'bucket'], i => `<a href="#/invoices/${i.id}">Open</a>`)}`;
+}
+async function exportCsv(type) {
+  const r = await fetch('/api/rep/export/' + type, { headers: { Authorization: 'Bearer ' + T } });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = type + '.csv'; a.click();
+}
+
+// ---------- Admin: catalog, plans, discounts, taxes (one generic editor) ----------
+const CRUD = {
+  products: ['Products', 'products', [F('name'), F('type'), F('sales_price', 'number'), F('cost_price', 'number'), F('notes')]],
+  variants: ['Product variants', 'variants', [F('product_id', 'select', { src: 'products', l: 'product' }), F('attribute', 'text', { l: 'attribute (for example Brand)' }), F('value', 'text', { l: 'value (for example Odoo)' }), F('extra_price', 'number', { l: 'price adjustment' })]],
+  plans: ['Plans', 'plans', [F('name'), F('price', 'number'),
+    F('period', 'select', { l: 'billing period', opts: [['daily', 'Daily'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['yearly', 'Yearly']] }),
+    F('min_qty', 'number', { l: 'minimum quantity' }), F('start_date', 'date', { l: 'available from' }), F('end_date', 'date', { l: 'available until' }),
+    F('auto_close', 'select', { opts: YN, l: 'closes automatically when it ends' }), F('closable', 'select', { opts: YN, l: 'customer can close' }),
+    F('pausable', 'select', { opts: YN, l: 'customer can pause' }), F('renewable', 'select', { opts: YN, l: 'customer can renew' })]],
+  discounts: ['Discounts', 'discounts', [F('name'), F('type', 'select', { opts: [['percent', 'Percentage'], ['fixed', 'Fixed amount']] }), F('value', 'number'),
+    F('min_amount', 'number', { l: 'minimum purchase' }), F('min_qty', 'number', { l: 'minimum quantity' }),
+    F('start_date', 'date'), F('end_date', 'date'), F('usage_limit', 'number', { l: 'usage limit' }),
+    F('product_id', 'select', { src: 'products', optional: true, l: 'product (leave empty for whole subscriptions)' })]],
+  taxes: ['Taxes', 'taxes', [F('name'), F('rate', 'number', { l: 'rate (%)' })]]
+};
+let C = {};
+async function crudView(title, path, fields, into = 'view') {
+  await loadRefs(fields.filter(f => f.src).map(f => f.src));
+  C = { path, fields, rows: [], edit: 0, into };
+  $(into).innerHTML = `${title ? `<h2>${title}</h2>` : ''}<div id="form">${formHTML(fields)}<br><br>
+    <button class="primary" id="csave" onclick="crudSave()">Add</button> <button onclick="crudReset()">Clear</button></div><div id="list"></div>`;
+  crudList();
+}
+async function crudList() {
+  C.rows = await api(C.path);
+  $('list').innerHTML = table(C.rows, ['id', ...C.fields.map(f => f.n)], r => `<button onclick="crudEdit(${r.id})">Edit</button> <button onclick="crudDel(${r.id})">Delete</button>`);
+}
+function crudEdit(id) {
+  const r = C.rows.find(x => x.id === id);
+  C.fields.forEach(f => $('f_' + f.n).value = r[f.n] ?? '');
+  C.edit = id; $('csave').textContent = 'Update'; scrollTo(0, 0);
+}
+function crudReset() { C.fields.forEach(f => { if (f.t !== 'select') $('f_' + f.n).value = ''; }); C.edit = 0; $('csave').textContent = 'Add'; }
+async function crudSave() {
+  const d = await api(C.edit ? `${C.path}/${C.edit}` : C.path, C.edit ? 'PUT' : 'POST', readForm(C.fields));
+  say(d.error || 'Saved', !!d.error);
+  if (!d.error) { crudReset(); crudList(); }
+}
+async function crudDel(id) {
+  if (!confirm('Delete this record?')) return;
+  const d = await api(`${C.path}/${id}`, 'DELETE'); say(d.error || 'Deleted', !!d.error); crudList();
+}
+
+// ---------- Admin: users and settings ----------
+const STAFF = [F('name'), F('email', 'email'), F('password', 'password')];
+async function users() {
+  const rows = await api('users');
+  $('view').innerHTML = `<h2>Users and roles</h2><h3>Add a staff member</h3><div id="form">${formHTML(STAFF)}<br><br>
+    <button class="primary" onclick="staffSave()">Create staff account</button></div>
+    <h3>Team</h3>${table(rows, ['id', 'name', 'email', 'role'], u => u.id === ME ? '' : `<button onclick="setRole(${u.id},'${u.role === 'admin' ? 'staff' : 'admin'}')">Make ${u.role === 'admin' ? 'staff' : 'admin'}</button>`)}`;
+}
+async function staffSave() {
+  const d = await api('staff', 'POST', readForm(STAFF));
+  say(d.error || 'Staff account created', !!d.error); if (!d.error) users();
+}
+async function setRole(id, role) { const d = await api(`users/${id}/role`, 'PUT', { role }); say(d.error || 'Role updated', !!d.error); users(); }
+
+const COMPANY = [F('company_name'), F('address'), F('email', 'email'), F('phone'), F('tax_id', 'text', { l: 'tax registration number' }),
+  F('invoice_footer', 'text', { l: 'invoice footer text' }), F('methods', 'text', { l: 'payment methods, comma separated' }), F('gateway', 'text', { l: 'payment gateway notes' })];
+async function settings() {
+  const c = await api('company');
+  $('view').innerHTML = `<h2>Settings</h2><h3>Company profile and invoice layout</h3><div id="cform">${formHTML(COMPANY)}<br><br>
+    <button class="primary" onclick="companySave()">Save settings</button></div><h3>Payment terms</h3><div id="terms"></div>`;
+  COMPANY.forEach(f => $('f_' + f.n).value = c[f.n] ?? '');
+  crudView('', 'terms', [F('name'), F('days', 'number', { l: 'days until due' })], 'terms');
+}
+async function companySave() {
+  const body = readForm(COMPANY);
+  const d = await api('company', 'PUT', body);
+  say(d.error || 'Settings saved', !!d.error);
+  if (!d.error && body.methods) METHODS = body.methods.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+// ---------- Start ----------
+const ROUTES = { dashboard, customers, subs, templates, invoices, payments, reports, users, settings };
+for (const k in CRUD) ROUTES[k] = () => crudView(...CRUD[k]);
+const ADMIN_ONLY = [...Object.keys(CRUD), 'users', 'settings'];
+route();
+</script></body></html>

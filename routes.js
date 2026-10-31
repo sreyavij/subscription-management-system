@@ -51,6 +51,7 @@ module.exports = (app) => {
     const to = FLOW[s.status];
     db.prepare('UPDATE subscriptions SET status=?, next_billing=COALESCE(?,next_billing) WHERE id=?')
       .run(to, to === 'Active' ? s.start_date : null, s.id);
+      db.audit('subscription', s.id, s.status + ' to ' + to, q.user.id);
     r.json({ status: to });
   });
   app.post('/api/subscriptions/:id/pause', auth('admin', 'staff'), (q, r) => {

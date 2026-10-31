@@ -32,7 +32,7 @@ const billOne = db.transaction((s, start, next) => {
   const lines = db.prepare(`SELECT l.*, p.name, t.rate FROM sub_lines l
     JOIN products p ON p.id=l.product_id LEFT JOIN taxes t ON t.id=l.tax_id WHERE l.sub_id=?`).all(s.id);
   const inv = db.prepare('INSERT INTO invoices(number,sub_id,customer_id,period_start,due_date) VALUES(?,?,?,?,?)')
-    .run(`INV-${s.id}-${start}`, s.id, s.customer_id, start, addDays(start, 15));
+    .run(`INV-${s.id}-${start}`, s.id, s.customer_id, start, addDays(start, (db.prepare('SELECT days FROM payment_terms WHERE name=?').get(s.payment_terms) || { days: 15 }).days));
 
   let sub = 0, disc = 0, tax = 0;
   for (const l of lines) {

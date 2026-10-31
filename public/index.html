@@ -19,6 +19,6 @@ async function login(){
   const d = await post('/api/login');
   if (d.error) { msg.style.color = ''; return msg.textContent = d.error; }
   localStorage.setItem('token', d.token); localStorage.setItem('role', d.role);
-  location.href = d.role === 'customer' ? '/portal.html' : '/dashboard.html';
+  location.href = d.role === 'customer' ? '/portal.html' : '/office.html';
 }
 </script></body></html>

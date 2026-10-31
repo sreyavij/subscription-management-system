@@ -30,4 +30,23 @@ CREATE TABLE IF NOT EXISTS payments(id INTEGER PRIMARY KEY, invoice_id INT, meth
 CREATE INDEX IF NOT EXISTS i1 ON subscriptions(status, next_billing);
 CREATE INDEX IF NOT EXISTS i2 ON invoices(status, due_date);
 `);
+
+for (const c of ['company', 'phone', 'address']) { try { db.exec(`ALTER TABLE users ADD COLUMN ${c} TEXT`); } catch {} }
+for (const [t, c] of [['subscriptions', 'valid_until TEXT'], ['subscriptions', 'template_id INT'], ['invoices', 'sent_at TEXT']]) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN ${c}`); } catch {}
+}
+db.exec(`
+CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY, entity TEXT, entity_id INT, action TEXT, user_id INT, at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS templates(id INTEGER PRIMARY KEY, name TEXT, validity_days INT, plan_id INT);
+CREATE TABLE IF NOT EXISTS template_lines(id INTEGER PRIMARY KEY, template_id INT, product_id INT, variant_id INT, qty INT, tax_id INT);
+CREATE TABLE IF NOT EXISTS payment_terms(id INTEGER PRIMARY KEY, name TEXT, days INT);
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+`);
+if (!db.prepare('SELECT 1 FROM payment_terms').get()) {
+  const ins = db.prepare('INSERT INTO payment_terms(name,days) VALUES(?,?)');
+  ins.run('Immediate', 0); ins.run('Net 15', 15); ins.run('Net 30', 30);
+}
+db.audit = (entity, id, action, uid) =>
+  db.prepare('INSERT INTO audit_log(entity,entity_id,action,user_id) VALUES(?,?,?,?)').run(entity, id, action, uid || null);
+
 module.exports = db;
