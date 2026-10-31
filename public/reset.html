@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reset password - Brightloop</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<div class="auth">
+  <h1><svg width="28" height="28" viewBox="0 0 28 28"><path d="M22 14a8 8 0 1 1-3-6.2" fill="none" stroke="#00D4C4" stroke-width="3" stroke-linecap="round"/></svg>Reset password</h1>
+  <p>Use at least 9 characters, with an uppercase letter, a lowercase letter and a special character.</p>
+  <input id="pw" type="password" placeholder="New password">
+  <input id="pw2" type="password" placeholder="Confirm new password">
+  <button class="primary" style="width:100%;padding:11px" onclick="reset()">Set new password</button>
+  <p id="msg" style="margin-top:14px;font-weight:600"></p>
+  <p><a href="/">Back to login</a></p>
+</div>
+<script>
+const token = new URLSearchParams(location.search).get('token');
+async function reset() {
+  const m = document.getElementById('msg'), pw = document.getElementById('pw').value;
+  const bad = t => { m.style.color = 'var(--bad)'; m.textContent = t; };
+  if (!token) return bad('This reset link is incomplete. Request a new one.');
+  if (pw !== document.getElementById('pw2').value) return bad('The two passwords do not match');
+  const d = await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, password: pw }) }).then(r => r.json());
+  if (d.error) return bad(d.error);
+  m.style.color = 'var(--teal-deep)';
+  m.innerHTML = 'Password updated. <a href="/">Log in now</a>';
+}
+</script></body></html>

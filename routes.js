@@ -55,7 +55,9 @@ module.exports = (app) => {
     r.json({ status: to });
   });
   app.post('/api/subscriptions/:id/pause', auth('admin', 'staff'), (q, r) => {
-    db.prepare('UPDATE subscriptions SET paused = 1 - paused WHERE id=?').run(q.params.id); r.json({ ok: true });
+    db.prepare('UPDATE subscriptions SET paused = 1 - paused WHERE id=?').run(q.params.id);
+    db.audit('subscription', +q.params.id, 'Pause toggled', q.user.id);
+    r.json({ ok: true });
   });
   app.get('/api/subscriptions', auth('admin', 'staff'), (q, r) => {
     const page = Math.max(1, +q.query.page || 1);
