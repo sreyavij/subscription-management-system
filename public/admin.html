@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Admin Setup</title>
+<style>
+body{font-family:sans-serif;margin:20px;max-width:1000px}
+nav button{margin:2px;padding:6px 10px}
+nav button.on{background:#333;color:#fff}
+label{display:block;margin:6px 0 2px;font-size:13px}
+input,select{padding:5px;min-width:220px}
+table{border-collapse:collapse;width:100%;margin:12px 0}
+td,th{border:1px solid #ddd;padding:5px;text-align:left;font-size:13px}
+.line{border:1px dashed #aaa;padding:8px;margin:6px 0}
+#msg{font-weight:bold}
+</style></head>
+<body>
+<h2>Admin Setup <a href="/dashboard.html">Dashboard</a> <button onclick="logout()">Logout</button></h2>
+<nav id="tabs"></nav>
+<p id="msg"></p>
+<div id="form"></div>
+<div id="list"></div>
+<script>
+const T = localStorage.getItem('token');
+if (!T || localStorage.getItem('role') === 'customer') location.href = '/';
+const logout = () => { localStorage.clear(); location.href = '/'; };
+const $ = id => document.getElementById(id);
+const api = (u, m = 'GET', b) => fetch('/api/' + u, {
+  method: m,
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + T },
+  body: b ? JSON.stringify(b) : undefined
+}).then(r => r.json());
+
+const F = (n, t = 'text', x = {}) => ({ n, t, ...x });
+const YN = [['1', 'Yes'], ['0', 'No']];
+const ENT = {
+  products: { path: 'products', fields: [F('name'), F('type'), F('sales_price', 'number'), F('cost_price', 'number'), F('notes')] },
+  variants: { path: 'variants', fields: [F('product_id', 'select', { src: 'products' }), F('attribute'), F('value'), F('extra_price', 'number')] },
+  plans: { path: 'plans', fields: [F('name'), F('price', 'number'),
+    F('period', 'select', { opts: [['daily', 'daily'], ['weekly', 'weekly'], ['monthly', 'monthly'], ['yearly', 'yearly']] }),
+    F('min_qty', 'number'), F('start_date', 'date'), F('end_date', 'date'),
+    F('auto_close', 'select', { opts: YN }), F('closable', 'select', { opts: YN }),
+    F('pausable', 'select', { opts: YN }), F('renewable', 'select', { opts: YN })] },
+  taxes: { path: 'taxes', fields: [F('name'), F('rate', 'number')] },
+  discounts: { path: 'discounts', fields: [F('name'),
+    F('type', 'select', { opts: [['percent', 'percent'], ['fixed', 'fixed amount']] }), F('value', 'number'),
+    F('min_amount', 'number'), F('min_qty', 'number'), F('start_date', 'date'), F('end_date', 'date'),
+    F('usage_limit', 'number'), F('product_id', 'select', { src: 'products', optional: true })] },
+  staff: { path: 'staff', nolist: true, fields: [F('name'), F('email'), F('password', 'password')] },
+  subscription: { custom: true }
+};
+const TITLES = { products: 'Products', variants: 'Variants', plans: 'Plans', taxes: 'Taxes', discounts: 'Discounts', staff: 'Add staff', subscription: 'New subscription' };
+
+let cur, ref = {};
+async function loadRefs() {
+  const [products, variants, plans, taxes, customers] = await Promise.all(
+    ['products', 'variants', 'plans', 'taxes', 'customers'].map(p => api(p)));
+  ref = { products, variants, plans, taxes, customers };
+}
+const arr = x => Array.isArray(x) ? x : [];
+const opt = (rows, label, none) => (none ? '<option value="">(none)</option>' : '') +
+  arr(rows).map(r => `<option value="${r.id}">${label(r)}</option>`).join('');
+
+$('tabs').innerHTML = Object.keys(TITLES).map(k => `<button id="t_${k}" onclick="show('${k}')">${TITLES[k]}</button>`).join('');
+
+async function show(k) {
+  cur = k; $('msg').textContent = '';
+  document.querySelectorAll('nav button').forEach(b => b.className = '');
+  $('t_' + k).className = 'on';
+  await loadRefs();
+  if (k === 'subscription') return subForm();
+  const e = ENT[k];
+  $('form').innerHTML = '<h3>' + TITLES[k] + '</h3>' + e.fields.map(f => {
+    let input;
+    if (f.t === 'select') {
+      const o = f.src ? opt(ref[f.src], r => r.name, f.optional) : f.opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+      input = `<select id="f_${f.n}">${o}</select>`;
+    } else input = `<input id="f_${f.n}" type="${f.t}">`;
+    return `<label>${f.n}</label>${input}`;
+  }).join('') + '<br><br><button onclick="save()">Save</button>';
+  list();
+}
+
+async function save() {
+  const e = ENT[cur], body = {};
+  for (const f of e.fields) {
+    let v = $('f_' + f.n).value;
+    if (v === '') v = null;
+    else if (f.t === 'number' || (f.t === 'select' && !isNaN(v))) v = Number(v);
+    body[f.n] = v;
+  }
+  const d = await api(e.path, 'POST', body);
+  $('msg').style.color = d.error ? 'crimson' : 'green';
+  $('msg').textContent = d.error || 'Saved';
+  if (!d.error) { e.fields.forEach(f => { if (f.t !== 'select') $('f_' + f.n).value = ''; }); list(); }
+}
+
+async function list() {
+  const e = ENT[cur];
+  if (e.nolist) { $('list').innerHTML = ''; return; }
+  const rows = await api(e.path);
+  if (!arr(rows).length) { $('list').innerHTML = '<p>No records yet.</p>'; return; }
+  const cols = ['id', ...e.fields.map(f => f.n)];
+  $('list').innerHTML = '<table><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '<th></th></tr>' +
+    rows.map(r => '<tr>' + cols.map(c => `<td>${r[c] ?? ''}</td>`).join('') +
+      `<td><button onclick="del(${r.id})">Delete</button></td></tr>`).join('') + '</table>';
+}
+async function del(id) {
+  if (!confirm('Delete?')) return;
+  const d = await api(ENT[cur].path + '/' + id, 'DELETE');
+  $('msg').textContent = d.error || 'Deleted'; list();
+}
+
+// ---------- Subscription form ----------
+function subForm() {
+  $('list').innerHTML = '';
+  $('form').innerHTML = `<h3>New subscription</h3>
+  <label>Customer (must have signed up first)</label><select id="s_cust">${opt(ref.customers, r => r.name + ' - ' + r.email)}</select>
+  <label>Plan</label><select id="s_plan">${opt(ref.plans, r => r.name + ' (' + r.period + ')')}</select>
+  <label>Start date</label><input id="s_start" type="date">
+  <label>Expiry date</label><input id="s_exp" type="date">
+  <label>Payment terms</label><input id="s_terms" value="Net 15">
+  <h4>Lines</h4><div id="lines"></div>
+  <button onclick="addLine()">+ Add line</button><br><br>
+  <button onclick="saveSub()">Create subscription</button>`;
+  addLine();
+}
+function addLine() {
+  const d = document.createElement('div'); d.className = 'line';
+  d.innerHTML = `Product <select class="l_p">${opt(ref.products, r => r.name + ' (' + r.sales_price + ')')}</select>
+  Variant <select class="l_v"><option value="">(none)</option>${arr(ref.variants).map(v => {
+    const p = arr(ref.products).find(p => p.id === v.product_id);
+    return `<option value="${v.id}">${p ? p.name : ''}: ${v.value} (+${v.extra_price})</option>`; }).join('')}</select>
+  Qty <input class="l_q" type="number" value="1" min="1" style="min-width:60px;width:60px">
+  Tax <select class="l_t">${opt(ref.taxes, r => r.name + ' ' + r.rate + '%', true)}</select>
+  <button onclick="this.parentNode.remove()">x</button>`;
+  $('lines').appendChild(d);
+}
+async function saveSub() {
+  const lines = [...document.querySelectorAll('.line')].map(l => ({
+    product_id: +l.querySelector('.l_p').value,
+    variant_id: l.querySelector('.l_v').value ? +l.querySelector('.l_v').value : null,
+    qty: +l.querySelector('.l_q').value,
+    tax_id: l.querySelector('.l_t').value ? +l.querySelector('.l_t').value : null }));
+  if (!$('s_start').value || !lines.length) { $('msg').style.color = 'crimson'; return $('msg').textContent = 'Start date and at least one line are required'; }
+  const d = await api('subscriptions', 'POST', {
+    customer_id: +$('s_cust').value, plan_id: +$('s_plan').value,
+    start_date: $('s_start').value, expiry_date: $('s_exp').value || null,
+    payment_terms: $('s_terms').value, lines });
+  $('msg').style.color = d.error ? 'crimson' : 'green';
+  $('msg').textContent = d.error || `Subscription #${d.id} created as Draft. Open the Dashboard > Subscriptions and click "Next status" until it is Active.`;
+}
+show('products');
+</script></body></html>

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>My Account</title>
+<style>body{font-family:sans-serif;margin:20px}table{border-collapse:collapse;width:100%;margin:8px 0}td,th{border:1px solid #ddd;padding:6px;text-align:left}</style></head>
+<body>
+<h2>My Account <button onclick="localStorage.clear();location.href='/'">Logout</button></h2>
+<h3>My subscriptions</h3><div id="s"></div>
+<h3>My invoices</h3><div id="i"></div>
+<script>
+const T = localStorage.getItem('token'); if (!T) location.href = '/';
+const get = u => fetch('/api/' + u, { headers: { Authorization: 'Bearer ' + T } }).then(r => r.json());
+const table = (rows, cols) => !Array.isArray(rows) || !rows.length ? '<p>Nothing yet.</p>' :
+  '<table><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>' +
+  rows.map(r => '<tr>' + cols.map(c => `<td>${r[c] ?? ''}</td>`).join('') + '</tr>').join('') + '</table>';
+get('my/subscriptions').then(r => s.innerHTML = table(r, ['number', 'status', 'start_date', 'expiry_date', 'next_billing']));
+get('my/invoices').then(r => i.innerHTML = table(r, ['number', 'total', 'amount_paid', 'status', 'due_date']));
+</script></body></html>
