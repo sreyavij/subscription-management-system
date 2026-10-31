@@ -1,6 +1,16 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Brightloop</title><link rel="stylesheet" href="/style.css"></head>
+<title>Brightloop</title><link rel="stylesheet" href="/style.css">
+<style>
+.roles{display:grid;gap:10px}
+.role{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;text-align:left;
+  padding:14px 16px;border-radius:12px;border-left:4px solid var(--line)}
+.role b{font-size:16px;color:var(--slate-900)}
+.role span{font-size:13px;font-weight:400;color:var(--slate-500)}
+.role:hover{border-left-color:var(--teal);background:var(--teal-soft)}
+.back{display:inline-block;margin-bottom:14px}
+.note{color:var(--muted);font-size:13.5px;margin:6px 0 0}
+</style></head>
 <body>
 <div class="auth-wrap">
   <section class="auth-hero">
@@ -14,30 +24,73 @@
       <li>One live view of revenue, balances and overdue payments</li>
     </ul>
   </section>
+
   <section class="auth-form">
-    <h2>Welcome back</h2>
-    <p class="sub">Sign in to manage subscriptions and invoices.</p>
-    <input id="email" type="email" placeholder="Email">
-    <input id="pw" type="password" placeholder="Password">
-    <input id="uname" placeholder="Your name (new accounts only)">
-    <div class="row"><button class="primary" onclick="login()">Log in</button><button onclick="signup()">Create account</button></div>
-    <p style="margin:14px 0 0"><a href="/forgot.html">Forgot your password?</a></p>
-    <p id="msg" class="err"></p>
+    <!-- Step 1: choose a role -->
+    <div id="pick">
+      <h2>Welcome to Brightloop</h2>
+      <p class="sub">Choose how you want to sign in.</p>
+      <div class="roles">
+        <button class="role" onclick="choose('admin')"><b>Admin</b><span>Products, plans, taxes, discounts, users and settings</span></button>
+        <button class="role" onclick="choose('staff')"><b>Staff</b><span>Customers, subscriptions, invoices and payments</span></button>
+        <button class="role" onclick="choose('customer')"><b>Customer</b><span>Your subscriptions, invoices and payments</span></button>
+      </div>
+    </div>
+
+    <!-- Step 2: sign in -->
+    <div id="login" hidden>
+      <a class="back" href="#" onclick="back();return false">&larr; Change role</a>
+      <h2 id="ttl"></h2>
+      <p class="sub" id="sub"></p>
+      <input id="uname" placeholder="Your name (new accounts only)" hidden>
+      <input id="email" type="email" placeholder="Email">
+      <input id="pw" type="password" placeholder="Password">
+      <div class="row"><button class="primary" onclick="doLogin()">Log in</button><button id="signupBtn" onclick="signup()" hidden>Create account</button></div>
+      <p class="note" id="staffNote" hidden>Staff and admin accounts are created by an administrator.</p>
+      <p style="margin:14px 0 0"><a href="/forgot.html">Forgot your password?</a></p>
+      <p id="msg" class="err"></p>
+    </div>
   </section>
 </div>
+
 <script>
 const g = id => document.getElementById(id);
+const COPY = {
+  admin: ['Admin login', 'Manage the catalog, pricing, users and settings.'],
+  staff: ['Staff login', 'Handle customers, subscriptions, invoices and payments.'],
+  customer: ['Customer login', 'View and manage your subscriptions and invoices.']
+};
+let role = '';
+
+function choose(r) {
+  role = r;
+  g('ttl').textContent = COPY[r][0];
+  g('sub').textContent = COPY[r][1];
+  const cust = r === 'customer';
+  g('uname').hidden = !cust;            // name field is only for new customer accounts
+  g('signupBtn').hidden = !cust;        // only customers can self-register
+  g('staffNote').hidden = cust;
+  g('msg').textContent = '';
+  g('pick').hidden = true; g('login').hidden = false;
+  g('email').focus();
+}
+function back() { g('login').hidden = true; g('pick').hidden = false; g('pw').value = ''; g('msg').textContent = ''; }
+
 const body = () => JSON.stringify({ name: g('uname').value, email: g('email').value, password: g('pw').value });
 const post = u => fetch(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body() }).then(r => r.json());
+const show = (t, ok) => { g('msg').style.color = ok ? 'var(--teal-deep)' : ''; g('msg').textContent = t; };
+
 async function signup() {
   const d = await post('/api/signup');
-  g('msg').style.color = d.error ? '' : 'var(--teal-deep)';
-  g('msg').textContent = d.error || 'Account created. You can log in now.';
+  show(d.error || 'Account created. You can log in now.', !d.error);
 }
-async function login() {
+async function doLogin() {
   const d = await post('/api/login');
-  if (d.error) { g('msg').style.color = ''; return g('msg').textContent = d.error; }
+  if (d.error) return show(d.error);
+  if (d.role !== role)   // wrong door: do not keep the session
+    return show(`This is a ${d.role} account. Go back and choose "${d.role === 'admin' ? 'Admin' : d.role === 'staff' ? 'Staff' : 'Customer'}" to sign in.`);
   localStorage.setItem('token', d.token); localStorage.setItem('role', d.role);
   location.href = d.role === 'customer' ? '/portal.html' : '/office.html';
 }
+['email', 'pw'].forEach(id => g(id).addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); }));
 </script></body></html>
